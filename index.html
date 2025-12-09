@@ -2,47 +2,77 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>HybridSecure Chat — Minimal Demo</title>
+  <title>HybridSecure Chat — Demo</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="stylesheet" href="css/styles.css" />
-  <!-- libsodium -->
+  <link rel="stylesheet" href="css/styles.css">
   <script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.9/dist/modules/libsodium-wrappers.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
   <div class="app">
     <header>
-      <h1>HybridSecure Chat</h1>
-      <div class="hint">Demo — hosted on GitHub Pages. Traffic shown in Google Sheet.</div>
+      <div class="brand">
+        <h1>HybridSecure</h1>
+        <div class="tag">Encrypted chat — demo</div>
+      </div>
+      <div id="signin-area"></div>
     </header>
 
     <main>
-      <section class="controls">
-        <label>Room ID</label>
-        <input id="roomId" value="demo-room-1" />
-        <label>Username</label>
-        <input id="username" placeholder="choose unique username" />
-        <div class="buttons">
-          <button id="btnClaim">Claim</button>
-          <button id="btnGenKeys">Generate Keys</button>
+      <aside class="leftpanel">
+        <div class="profile">
+          <img id="avatar" src="" alt="" class="avatar" />
+          <div>
+            <div id="displayName" class="displayName">Not signed in</div>
+            <div id="displayEmail" class="small muted"></div>
+          </div>
         </div>
-        <div id="members" class="members"></div>
-      </section>
 
-      <section class="chat">
-        <div id="chatbox" class="chatbox"></div>
-        <div class="composer">
-          <select id="recipient"><option value="*">Broadcast *</option></select>
-          <input id="message" placeholder="Type message..." />
-          <button id="send">Send</button>
+        <div class="section">
+          <label>Display username</label>
+          <input id="username" placeholder="choose username" />
+          <button id="btnClaim" class="btn">Claim username</button>
+        </div>
+
+        <div class="section">
+          <label>Search users</label>
+          <input id="searchUser" placeholder="search username" />
+          <div id="searchResults" class="list"></div>
+        </div>
+
+        <div class="section">
+          <h3>Contacts</h3>
+          <div id="contacts" class="list"></div>
+        </div>
+
+        <div class="section">
+          <h3>Requests</h3>
+          <div id="requests" class="list"></div>
+        </div>
+      </aside>
+
+      <section class="center">
+        <div id="chatsList" class="chatsList"></div>
+        <div id="chatWindow" class="chatWindow hidden">
+          <div id="chatHeader" class="chatHeader"></div>
+          <div id="messages" class="messages"></div>
+          <div class="composer">
+            <input id="messageInput" placeholder="Type a message..." />
+            <button id="sendBtn" class="btn">Send</button>
+          </div>
+        </div>
+        <div id="welcome" class="welcome">
+          <h2>Welcome</h2>
+          <p>Sign in and claim a username to start.</p>
         </div>
       </section>
     </main>
 
     <footer>
-      <small>Replace placeholders in js/app.js (FORM_ACTION_URL, ENTRY_* and SHEET_CSV_URL).</small>
+      <small>Demo app — Google Forms + Google Sheets backend.</small>
     </footer>
   </div>
 
-  <script type="module" src="js/main.js"></script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>
