@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>HybridSecure Chat — Minimal Demo</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <!-- libsodium -->
+  <script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.9/dist/modules/libsodium-wrappers.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>HybridSecure Chat</h1>
+      <div class="hint">Demo — hosted on GitHub Pages. Traffic shown in Google Sheet.</div>
+    </header>
+
+    <main>
+      <section class="controls">
+        <label>Room ID</label>
+        <input id="roomId" value="demo-room-1" />
+        <label>Username</label>
+        <input id="username" placeholder="choose unique username" />
+        <div class="buttons">
+          <button id="btnClaim">Claim</button>
+          <button id="btnGenKeys">Generate Keys</button>
+        </div>
+        <div id="members" class="members"></div>
+      </section>
+
+      <section class="chat">
+        <div id="chatbox" class="chatbox"></div>
+        <div class="composer">
+          <select id="recipient"><option value="*">Broadcast *</option></select>
+          <input id="message" placeholder="Type message..." />
+          <button id="send">Send</button>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <small>Replace placeholders in js/app.js (FORM_ACTION_URL, ENTRY_* and SHEET_CSV_URL).</small>
+    </footer>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
