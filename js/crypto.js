@@ -1,10 +1,18 @@
 // crypto.js
 import { base64UrlToU8, u8ToBase64Url } from './utils.js';
 
+// crypto.js — libsodium loader (updated)
 export async function initSodium() {
-  await libsodium.ready;
-  return libsodium;
+  // libsodium may be available as window.libsodium or window.sodium depending on build
+  const lib = (window.libsodium || window.sodium || window.libsodium_wrappers);
+  if (!lib) {
+    throw new Error("libsodium not found on window. Ensure you loaded the browser UMD build before your app. Use: https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.9/dist/browsers/sodium.js");
+  }
+  // `ready` is a Promise on the libsodium object
+  await lib.ready;
+  return lib;
 }
+
 
 export function computeShared(sodium, mySkU8, theirPkU8) {
   return sodium.crypto_scalarmult(mySkU8, theirPkU8);
