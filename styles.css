@@ -1,0 +1,43 @@
+:root{
+  --bg: #fbfdff;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --panel: #ffffff;
+  --border: #e6e9ef;
+  --me: #e6f0ff;
+}
+*{box-sizing:border-box}
+html,body,#app{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial}
+#app{display:flex;min-height:100vh;background:linear-gradient(180deg,#f5f7fb 0%, #fbfdff 100%)}
+aside#sidebar{width:280px;padding:16px;border-right:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column}
+.brand{font-weight:700;font-size:18px;margin-bottom:12px}
+#auth-area{margin-bottom:12px}
+.hidden{display:none}
+#signed-in{display:flex;flex-direction:column;gap:8px}
+#profile-name{font-weight:600}
+#profile-email{font-size:13px;color:var(--muted)}
+.auth-actions button{margin-right:6px;margin-top:6px;padding:6px 8px;font-size:13px;border-radius:6px;border:1px solid var(--border);background:white;cursor:pointer}
+.list{flex:1;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px;background:#fbfdff}
+.user-item{padding:8px;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:8px;border-bottom:1px solid #f1f4fb}
+.user-item:last-child{border-bottom:0}
+.user-item .name{font-weight:600}
+.user-item .email{font-size:12px;color:var(--muted)}
+.user-item.active{background:#eef6ff}
+.footer-note{font-size:12px;color:var(--muted);margin-top:8px}
+
+main#main{flex:1;display:flex;flex-direction:column;gap:8px;padding:14px}
+#chat-header{font-weight:700;font-size:16px;padding:6px 0}
+.messages{flex:1;overflow:auto;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px}
+.msg{padding:10px;border-radius:10px;margin-bottom:8px;max-width:75%;word-wrap:break-word;background:#f6f8fb}
+.msg.me{background:var(--me);margin-left:auto}
+.msg .meta{font-size:12px;color:var(--muted);margin-bottom:6px}
+.composer{display:flex;gap:10px;padding-top:6px}
+textarea#messageInput{flex:1;min-height:52px;padding:8px;border-radius:8px;border:1px solid var(--border);resize:vertical;font-size:14px}
+.controls{display:flex;flex-direction:column;gap:8px}
+button.primary{background:var(--accent);color:white;padding:10px 14px;border-radius:8px;border:none;cursor:pointer}
+.toast{position:fixed;right:16px;bottom:16px;background:#111;color:white;padding:8px 12px;border-radius:8px}
+
+@media (max-width:800px){
+  aside#sidebar{display:none}
+  main#main{padding:10px}
+}
