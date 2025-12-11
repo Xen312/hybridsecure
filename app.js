@@ -1,15 +1,16 @@
-/* app.js
-   - Uses libsodium for X25519
-   - Stores private key in IndexedDB (encrypted via passphrase if chosen)
-   - Uses Web Crypto HKDF + AES-GCM for message encryption/decryption
-   - Polls API_BASE for messages to current user (every 3s)
+/* app.js — Complete working static frontend for E2E chat
+   - Expects API_BASE and GOOGLE_CLIENT_ID to be defined in index.html BEFORE this script runs.
+   - Loads libsodium via window.sodium (sodium.js must be loaded before this file).
+   - Uses IndexedDB to store encrypted private key (or raw if user skips passphrase).
+   - Uses X25519 (libsodium) -> HKDF(SHA-256) -> AES-GCM for encryption.
+   - Polls API for new messages every 3 seconds.
 */
 
-(async function(){
-  // ---- Configurable values ----
-  const POLL_INTERVAL_MS = 3000; // recommended 3s for prototype
-  const RETENTION_DAYS = 30; // informational only (backend enforces)
-  // API_BASE and GOOGLE_CLIENT_ID are declared in index.html
+(async function () {
+  'use strict';
+
+  // ---- Config ----
+  const POLL_INTERVAL_MS = 3000;
 
   // ---- DOM refs ----
   const gsiButtonDiv = document.getElementById('gsi-button');
@@ -25,30 +26,52 @@
   const exportKeyBtn = document.getElementById('exportKeyBtn');
   const importKeyBtn = document.getElementById('importKeyBtn');
   const toastEl = document.getElementById('toast');
-  document.getElementById('pollIntervalDisplay').textContent = (POLL_INTERVAL_MS/1000) + 's';
 
   // ---- State ----
   let me = null; // { userId, name, email, idToken }
-  let myKeyPair = null; // { publicKey Uint8Array, privateKey Uint8Array }
-  let users = []; // other users list
+  let myKeyPair = null; // { publicKey: Uint8Array, privateKey: Uint8Array }
+  let users = [];
   let selectedUser = null;
   let lastPollISO = new Date(0).toISOString();
   let polling = false;
   let sodiumLib = null;
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
 
-  // ---- Initialize libsodium (safe) ----
-  if (typeof sodium === 'undefined') {
-    // Helpful error if the lib didn't load (e.g., blocked or wrong script)
-    console.error('libsodium not found. Make sure you included the UMD/browser build: https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.9/dist/browsers/sodium.js');
-    showToast('Crypto library failed to load. Disable extensions that block third-party scripts or fix index.html script tag.');
-    throw new Error('libsodium not loaded');
+  // ---- Utility: toast ----
+  function showToast(msg, t = 3000) {
+    if (!toastEl) return;
+    toastEl.textContent = msg;
+    toastEl.classList.remove('hidden');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => toastEl.classList.add('hidden'), t);
   }
-  await sodium.ready; // wait for libsodium initialization
-  sodiumLib = sodium;
 
+  // ---- Ensure libsodium loaded and ready ----
+  async function ensureSodiumLoaded(timeoutMs = 10000) {
+    const start = Date.now();
+    while (typeof window.sodium === 'undefined') {
+      if (Date.now() - start > timeoutMs) break;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    if (typeof window.sodium === 'undefined') {
+      throw new Error('libsodium not loaded (window.sodium missing)');
+    }
+    await window.sodium.ready;
+    return window.sodium;
+  }
 
-  // ---- IndexedDB utilities (simple) ----
-  function openDB(){
+  try {
+    sodiumLib = await ensureSodiumLoaded(10000);
+    console.log('libsodium ready');
+  } catch (err) {
+    console.error('libsodium failed to load', err);
+    alert('Crypto library failed to load. Ensure sodium.js is reachable and not blocked by extensions.');
+    return; // stop further execution
+  }
+
+  // ---- IndexedDB helpers ----
+  function openDB() {
     return new Promise((res, rej) => {
       const req = indexedDB.open('chat-app', 1);
       req.onupgradeneeded = ev => {
@@ -56,130 +79,110 @@
         if (!db.objectStoreNames.contains('keys')) db.createObjectStore('keys', { keyPath: 'userId' });
       };
       req.onsuccess = () => res(req.result);
-      req.onerror = (e) => rej(e);
+      req.onerror = () => rej(req.error);
     });
   }
 
-  async function saveKeyEncrypted(userId, encryptedObj){
+  async function saveKeyRecord(userId, record) {
     const db = await openDB();
     return new Promise((res, rej) => {
-      const tx = db.transaction('keys','readwrite');
-      tx.objectStore('keys').put(Object.assign({ userId }, encryptedObj));
+      const tx = db.transaction('keys', 'readwrite');
+      const store = tx.objectStore('keys');
+      store.put(Object.assign({ userId }, record));
       tx.oncomplete = () => res(true);
-      tx.onerror = e => rej(e);
+      tx.onerror = () => rej(tx.error);
     });
   }
-  async function loadKeyRecord(userId){
+
+  async function loadKeyRecord(userId) {
     const db = await openDB();
     return new Promise((res, rej) => {
-      const tx = db.transaction('keys','readonly');
+      const tx = db.transaction('keys', 'readonly');
       const req = tx.objectStore('keys').get(userId);
       req.onsuccess = () => res(req.result);
-      req.onerror = e => rej(e);
+      req.onerror = () => rej(req.error);
     });
   }
-  async function deleteKeyRecord(userId){
+
+  async function deleteKeyRecord(userId) {
     const db = await openDB();
     return new Promise((res, rej) => {
-      const tx = db.transaction('keys','readwrite');
-      const req = tx.objectStore('keys').delete(userId);
-      req.onsuccess = () => res(true);
-      req.onerror = e => rej(e);
+      const tx = db.transaction('keys', 'readwrite');
+      tx.objectStore('keys').delete(userId);
+      tx.oncomplete = () => res(true);
+      tx.onerror = () => rej(tx.error);
     });
   }
 
-  // ---- Web Crypto helpers ----
-  const enc = new TextEncoder();
-  const dec = new TextDecoder();
+  // ---- Base64 helpers ----
+  function arrayBufferToBase64(buf) {
+    const bytes = new Uint8Array(buf);
+    let str = '';
+    for (let i = 0; i < bytes.byteLength; i++) str += String.fromCharCode(bytes[i]);
+    return btoa(str);
+  }
+  function base64ToUint8Array(b64) {
+    const bin = atob(b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return arr;
+  }
 
-  async function deriveKeyFromPassphrase(passphrase, saltBase64, iterations = 150000){
-    const salt = base64ToUint8Array(saltBase64);
+  // ---- WebCrypto PBKDF2 -> AES-GCM for private key encryption ----
+  async function deriveKeyFromPassphrase(passphrase, saltUint8, iterations = 150000) {
     const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(passphrase), { name: 'PBKDF2' }, false, ['deriveKey']);
     const key = await crypto.subtle.deriveKey({
       name: 'PBKDF2',
-      salt: salt,
-      iterations: iterations,
+      salt: saltUint8,
+      iterations,
       hash: 'SHA-256'
-    }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt','decrypt']);
+    }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
     return key;
   }
 
-  async function encryptPrivateKeyWithPassphrase(privateKeyU8, passphrase){
+  async function encryptPrivateKeyWithPassphrase(privateKeyU8, passphrase) {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const saltB64 = arrayBufferToBase64(salt.buffer);
-    const ivB64 = arrayBufferToBase64(iv.buffer);
-    const key = await deriveKeyFromPassphrase(passphrase, saltB64);
+    const key = await deriveKeyFromPassphrase(passphrase, salt);
     const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, privateKeyU8);
     return {
       encryptedPrivateKeyBase64: arrayBufferToBase64(ct),
-      kdfSaltBase64: saltB64,
+      kdfSaltBase64: arrayBufferToBase64(salt.buffer),
       kdfIterations: 150000,
-      ivBase64: ivB64,
+      ivBase64: arrayBufferToBase64(iv.buffer),
       encryptedWithPassphrase: true
     };
   }
 
-  async function decryptPrivateKeyWithPassphrase(record, passphrase){
-    const key = await deriveKeyFromPassphrase(passphrase, record.kdfSaltBase64, record.kdfIterations);
+  async function decryptPrivateKeyWithPassphrase(record, passphrase) {
+    const salt = base64ToUint8Array(record.kdfSaltBase64);
     const iv = base64ToUint8Array(record.ivBase64);
+    const key = await deriveKeyFromPassphrase(passphrase, salt, record.kdfIterations || 150000);
     const ct = base64ToUint8Array(record.encryptedPrivateKeyBase64);
     const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
     return new Uint8Array(plain);
   }
 
-  // fallback: store raw private key (not recommended)
-  function recordFromRawPrivateKey(rawPrivU8){
-    return { rawPrivateKeyBase64: arrayBufferToBase64(rawPrivU8.buffer), encryptedWithPassphrase: false };
-  }
-  function rawPrivateKeyFromRecord(rec){
-    return base64ToUint8Array(rec.rawPrivateKeyBase64);
-  }
-
-  // ---- Base64 helpers ----
-  function arrayBufferToBase64(buf){
-    const bytes = new Uint8Array(buf);
-    let str = '';
-    for (let i=0;i<bytes.length;i++) str += String.fromCharCode(bytes[i]);
-    return btoa(str);
-  }
-  function base64ToUint8Array(b64){
-    const bin = atob(b64);
-    const len = bin.length;
-    const arr = new Uint8Array(len);
-    for (let i=0;i<len;i++) arr[i] = bin.charCodeAt(i);
-    return arr;
-  }
-
-  // ---- Toast ----
-  function showToast(msg, timeout=3000){
-    toastEl.textContent = msg;
-    toastEl.classList.remove('hidden');
-    clearTimeout(showToast._t);
-    showToast._t = setTimeout(()=> toastEl.classList.add('hidden'), timeout);
-  }
+  // ---- Simple UI helpers ----
+  function escapeHtml(s) { if (!s) return ''; return s.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
 
   // ---- Google Identity Services (GSI) ----
-  function initGSI(){
+  function initGSI() {
     window.handleCredentialResponse = async (resp) => {
       try {
         const idToken = resp.credential;
-        // decode token payload quickly
         const payload = JSON.parse(atob(idToken.split('.')[1]));
         me = { userId: payload.sub, name: payload.name || payload.email, email: payload.email, idToken };
         profileName.textContent = me.name;
         profileEmail.textContent = me.email;
         gsiButtonDiv.style.display = 'none';
         signedInDiv.classList.remove('hidden');
-        // Load or create keypair
         await ensureKeypairForMe();
-        // register public key
         await registerPublicKey();
-        // load user list and start polling
         await refreshUsers();
         startPolling();
-        showToast('Signed in as ' + (me.name || me.email));
-      } catch (e){
+        showToast('Signed in: ' + (me.name || me.email));
+      } catch (e) {
         console.error('GSI handler error', e);
         showToast('Sign-in failed');
       }
@@ -193,110 +196,87 @@
   }
 
   // ---- Keypair management ----
-  async function ensureKeypairForMe(){
-    if (!me) throw new Error('No user');
-    // Try load record from IndexedDB
-    const rec = await loadKeyRecord(me.userId);
-    if (rec) {
-      // if encrypted with passphrase, prompt for passphrase
-      if (rec.encryptedWithPassphrase) {
-        let tries = 0;
-        let ok = false;
-        while (!ok && tries < 3) {
-          const pass = prompt('Enter your passphrase to unlock your private key (or Cancel to skip):');
-          if (!pass) {
-            // user cancelled — treat as no key
-            break;
-          }
-          try {
-            const privU8 = await decryptPrivateKeyWithPassphrase(rec, pass);
-            myKeyPair = {
-              privateKey: privU8,
-              publicKey: sodiumLib.crypto_scalarmult_base(privU8) // derive public from private
-            };
-            ok = true;
-            break;
-          } catch (e) {
-            tries++;
-            alert('Incorrect passphrase. Try again.');
-          }
-        }
-        if (!ok && !myKeyPair) {
-          // user didn't unlock; offer to import or create new keypair (loses ability to read old messages)
-          if (confirm('Could not unlock key. Would you like to import a key file or create a new key (creating new key will lose access to messages encrypted to old key)?')) {
-            // user can import via UI button, or create new key
-            await createNewKeypairFlow();
-          } else {
-            // create new keypair
-            await createNewKeypairFlow();
-          }
-        }
-      } else {
-        // raw key stored
-        myKeyPair = {
-          privateKey: rawPrivateKeyFromRecord(rec),
-          publicKey: base64ToUint8Array(rec.publicKeyBase64 || arrayBufferToBase64(sodiumLib.crypto_scalarmult_base(rawPrivateKeyFromRecord(rec)).buffer))
-        };
-      }
-    } else {
-      // no key record found — create new keypair
-      await createNewKeypairFlow();
-    }
-  }
-
-  async function createNewKeypairFlow(){
-    const kp = sodiumLib.crypto_kx_keypair(); // gives publicKey, privateKey
+  async function createNewKeypairFlow() {
+    const kp = sodiumLib.crypto_kx_keypair(); // { publicKey, privateKey }
     myKeyPair = { publicKey: kp.publicKey, privateKey: kp.privateKey };
-    // Ask user if they want to protect private key with a passphrase
-    const wantPass = confirm('Protect private key with a passphrase? Recommended. Click OK to set a passphrase, Cancel to store locally (less secure).');
+    const wantPass = confirm('Protect private key with a passphrase? Recommended. OK = set passphrase, Cancel = store unencrypted (less secure).');
     if (wantPass) {
       let pass = null;
       while (!pass) {
         pass = prompt('Choose a passphrase to protect your private key. Remember it—we cannot recover it for you.');
-        if (!pass) { if (!confirm('No passphrase set. Store key unencrypted?')) continue; else break; }
+        if (!pass) {
+          if (!confirm('No passphrase chosen — store unencrypted?')) continue;
+          else break;
+        }
       }
       if (pass) {
         const rec = await encryptPrivateKeyWithPassphrase(myKeyPair.privateKey, pass);
-        // store also publicKey for convenience
         rec.publicKeyBase64 = arrayBufferToBase64(myKeyPair.publicKey.buffer);
-        await saveKeyEncrypted(me.userId, rec);
+        await saveKeyRecord(me.userId, rec);
       } else {
-        // store raw (not recommended)
-        const rec = recordFromRawPrivateKey(myKeyPair.privateKey);
-        rec.publicKeyBase64 = arrayBufferToBase64(myKeyPair.publicKey.buffer);
-        await saveKeyEncrypted(me.userId, rec);
+        const rec = { rawPrivateKeyBase64: arrayBufferToBase64(myKeyPair.privateKey.buffer), publicKeyBase64: arrayBufferToBase64(myKeyPair.publicKey.buffer), encryptedWithPassphrase: false };
+        await saveKeyRecord(me.userId, rec);
       }
     } else {
-      // store raw
-      const rec = recordFromRawPrivateKey(myKeyPair.privateKey);
-      rec.publicKeyBase64 = arrayBufferToBase64(myKeyPair.publicKey.buffer);
-      await saveKeyEncrypted(me.userId, rec);
+      const rec = { rawPrivateKeyBase64: arrayBufferToBase64(myKeyPair.privateKey.buffer), publicKeyBase64: arrayBufferToBase64(myKeyPair.publicKey.buffer), encryptedWithPassphrase: false };
+      await saveKeyRecord(me.userId, rec);
     }
   }
 
-  async function registerPublicKey(){
-    // upload public key to API (Apps Script upsert)
+  async function ensureKeypairForMe() {
+    if (!me) throw new Error('Not signed in');
+    const rec = await loadKeyRecord(me.userId);
+    if (rec) {
+      if (rec.encryptedWithPassphrase) {
+        let unlocked = false;
+        for (let tries = 0; tries < 3 && !unlocked; tries++) {
+          const pass = prompt('Enter passphrase to unlock your private key (Cancel to skip):');
+          if (!pass) break;
+          try {
+            const priv = await decryptPrivateKeyWithPassphrase(rec, pass);
+            myKeyPair = { privateKey: priv, publicKey: base64ToUint8Array(rec.publicKeyBase64) };
+            unlocked = true;
+          } catch (e) {
+            alert('Incorrect passphrase');
+          }
+        }
+        if (!unlocked && !myKeyPair) {
+          if (confirm('Could not unlock key. Create a new keypair? (You will lose ability to decrypt previous messages)')) {
+            await createNewKeypairFlow();
+          } else {
+            throw new Error('Key unlock aborted');
+          }
+        }
+      } else {
+        // raw stored
+        const priv = base64ToUint8Array(rec.rawPrivateKeyBase64);
+        const pub = rec.publicKeyBase64 ? base64ToUint8Array(rec.publicKeyBase64) : sodiumLib.crypto_scalarmult_base(priv);
+        myKeyPair = { privateKey: priv, publicKey: pub };
+      }
+    } else {
+      await createNewKeypairFlow();
+    }
+  }
+
+  async function registerPublicKey() {
+    if (!me || !myKeyPair) return;
     const pkB64 = arrayBufferToBase64(myKeyPair.publicKey.buffer);
-    const body = { idToken: me.idToken, publicKeyBase64: pkB64, name: me.name, email: me.email };
     try {
-      const r = await fetch(API_BASE, { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      const r = await fetch(API_BASE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ idToken: me.idToken, publicKeyBase64: pkB64, name: me.name, email: me.email }) });
       const j = await r.json();
-      if (j.ok) return true;
-      console.warn('registerPublicKey response', j);
-      return false;
+      if (!j.ok) console.warn('registerPublicKey response', j);
     } catch (e) {
       console.warn('registerPublicKey error', e);
-      return false;
     }
   }
 
   // ---- Users list ----
-  async function refreshUsers(){
+  async function refreshUsers() {
     usersDiv.textContent = 'Loading...';
     try {
       const r = await fetch(API_BASE + '?action=getUsers');
       const j = await r.json();
-      users = (j.users || []).filter(u => u.userId !== (me && me.userId));
+      users = (j.users || []).filter(u => !me || u.userId !== me.userId);
       renderUsers();
     } catch (e) {
       usersDiv.textContent = 'Failed to load users';
@@ -304,14 +284,14 @@
     }
   }
 
-  function renderUsers(){
+  function renderUsers() {
     usersDiv.innerHTML = '';
     if (!users.length) { usersDiv.textContent = 'No users yet'; return; }
     users.forEach(u => {
       const el = document.createElement('div');
       el.className = 'user-item' + (selectedUser && selectedUser.userId === u.userId ? ' active' : '');
-      el.innerHTML = `<div style="flex:1"><div class="name">${escapeHtml(u.name || u.email || u.userId)}</div><div class="email">${escapeHtml(u.email||'')}</div></div>`;
-      el.onclick = () => { selectedUser = u; chatHeader.textContent = 'Chat with: ' + (u.name||u.email); messagesDiv.innerHTML=''; lastPollISO = new Date(0).toISOString(); };
+      el.innerHTML = `<div style="flex:1"><div class="name">${escapeHtml(u.name || u.email || u.userId)}</div><div class="email">${escapeHtml(u.email || '')}</div></div>`;
+      el.onclick = () => { selectedUser = u; chatHeader.textContent = 'Chat with: ' + (u.name || u.email); messagesDiv.innerHTML = ''; lastPollISO = new Date(0).toISOString(); };
       usersDiv.appendChild(el);
     });
   }
@@ -320,61 +300,54 @@
   sendBtn.onclick = sendMessage;
   msgInput.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendMessage(); };
 
-  async function sendMessage(){
+  async function sendMessage() {
     const text = msgInput.value.trim();
     if (!text) return;
-    if (!me || !myKeyPair || !selectedUser) { showToast('Sign in and select a user first'); return; }
-    // compute shared secret: X25519(private, recipientPublic)
-    const recipientPub = base64ToUint8Array(selectedUser.publicKeyBase64);
-    const shared = sodiumLib.crypto_scalarmult(myKeyPair.privateKey, recipientPub); // Uint8Array
-    // per-message salt
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const saltB64 = arrayBufferToBase64(salt.buffer);
-    // msg id
-    const msgId = 'm_' + Date.now() + '_' + Math.floor(Math.random()*100000);
-    // derive AES key via HKDF
-    const infoStr = `${me.userId}|${selectedUser.userId}|${msgId}`;
-    const aesKey = await hkdfImport(shared, salt, infoStr);
-    // encrypt
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const aadStr = `${me.userId}|${selectedUser.userId}|${msgId}`;
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(aadStr) }, aesKey, enc.encode(text));
-    // build payload
-    const payload = {
-      idToken: me.idToken,
-      action: 'postMessage',
-      toUserId: selectedUser.userId,
-      ciphertextBase64: arrayBufferToBase64(ct),
-      ivBase64: arrayBufferToBase64(iv.buffer),
-      saltBase64: saltB64,
-      aad: aadStr,
-      msgId: msgId
-    };
-    // optimistic UI
-    appendMessage({ me: true, text, createdAt: new Date().toISOString() });
-    msgInput.value = '';
+    if (!me || !myKeyPair || !selectedUser) { showToast('Sign in and select a user'); return; }
     try {
-      const r = await fetch(API_BASE, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      const recipientPub = base64ToUint8Array(selectedUser.publicKeyBase64);
+      const shared = sodiumLib.crypto_scalarmult(myKeyPair.privateKey, recipientPub); // Uint8Array
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const saltB64 = arrayBufferToBase64(salt.buffer);
+      const msgId = 'm_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+      const infoStr = `${me.userId}|${selectedUser.userId}|${msgId}`;
+      const aesKey = await hkdfImport(shared, salt, infoStr);
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const aadStr = `${me.userId}|${selectedUser.userId}|${msgId}`;
+      const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(aadStr) }, aesKey, enc.encode(text));
+      const payload = {
+        idToken: me.idToken,
+        action: 'postMessage',
+        toUserId: selectedUser.userId,
+        ciphertextBase64: arrayBufferToBase64(ct),
+        ivBase64: arrayBufferToBase64(iv.buffer),
+        saltBase64: saltB64,
+        aad: aadStr,
+        msgId
+      };
+      appendMessage({ me: true, text, createdAt: new Date().toISOString() }); // optimistic
+      msgInput.value = '';
+      const r = await fetch(API_BASE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const j = await r.json();
       if (!j.ok) showToast('Send failed');
     } catch (e) {
-      console.error(e);
-      showToast('Send failed (network)');
+      console.error('sendMessage error', e);
+      showToast('Send failed');
     }
   }
 
-  function appendMessage({ me: isMe, text, createdAt }){
+  function appendMessage({ me: isMe, text, createdAt }) {
     const div = document.createElement('div');
     div.className = 'msg' + (isMe ? ' me' : '');
-    const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = (isMe ? 'Me' : (selectedUser? selectedUser.name : 'Other')) + ' • ' + (new Date(createdAt)).toLocaleString();
+    const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = (isMe ? 'Me' : (selectedUser ? selectedUser.name : 'Other')) + ' • ' + (new Date(createdAt)).toLocaleString();
     const body = document.createElement('div'); body.textContent = text;
     div.appendChild(meta); div.appendChild(body);
     messagesDiv.appendChild(div);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
   }
 
-  // ---- Polling for messages ----
-  async function pollOnce(){
+  // ---- Polling ----
+  async function pollOnce() {
     if (!me) return;
     try {
       const url = `${API_BASE}?action=getMessages&toUserId=${encodeURIComponent(me.userId)}&since=${encodeURIComponent(lastPollISO)}&idToken=${encodeURIComponent(me.idToken)}`;
@@ -383,80 +356,71 @@
       if (j.messages && j.messages.length) {
         lastPollISO = new Date().toISOString();
         for (const m of j.messages) {
-          // find sender in our users cache
           let sender = users.find(u => u.userId === m.fromUserId);
           if (!sender) {
-            // reload users to try to find sender
             await refreshUsers();
             sender = users.find(u => u.userId === m.fromUserId) || { userId: m.fromUserId, name: m.fromUserId, publicKeyBase64: null };
           }
-          // derive shared secret: X25519(myPrivate, senderPublic)
-          if (!sender.publicKeyBase64) { console.warn('No public key for sender', m.fromUserId); continue; }
-          const senderPub = base64ToUint8Array(sender.publicKeyBase64);
-          const shared = sodiumLib.crypto_scalarmult(myKeyPair.privateKey, senderPub);
-          // derive AES key using salt stored per message
-          const salt = base64ToUint8Array(m.saltBase64);
-          const aesKey = await hkdfImport(shared, salt, `${m.fromUserId}|${m.toUserId}|${m.msgId}`);
-          // decrypt
+          if (!sender.publicKeyBase64) { console.warn('Missing sender public key', m.fromUserId); continue; }
           try {
+            const senderPub = base64ToUint8Array(sender.publicKeyBase64);
+            const shared = sodiumLib.crypto_scalarmult(myKeyPair.privateKey, senderPub);
+            const salt = base64ToUint8Array(m.saltBase64);
+            const aesKey = await hkdfImport(shared, salt, `${m.fromUserId}|${m.toUserId}|${m.msgId}`);
             const iv = base64ToUint8Array(m.ivBase64);
             const ct = base64ToUint8Array(m.ciphertextBase64);
             const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(m.aad) }, aesKey, ct);
             const text = dec.decode(plainBuf);
-            // only display if message is from selected user (or show toast)
             if (selectedUser && selectedUser.userId === m.fromUserId) {
               appendMessage({ me: false, text, createdAt: m.createdAt });
             } else {
               showToast(`New message from ${sender.name || sender.userId}`);
             }
           } catch (e) {
-            console.warn('Decrypt failed for msg', m.msgId, e);
+            console.warn('Decrypt failed for message', m.msgId, e);
           }
         }
       }
     } catch (e) {
-      console.warn('poll error', e);
+      console.warn('pollOnce error', e);
     }
   }
 
-  function startPolling(){
+  function startPolling() {
     if (polling) return;
     polling = true;
-    (async function loop(){
+    (async function loop() {
       while (polling) {
-        try { await pollOnce(); } catch(e){ console.warn(e); }
+        try { await pollOnce(); } catch (e) { console.warn(e); }
         await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
       }
     })();
   }
 
-  function stopPolling(){ polling = false; }
+  function stopPolling() { polling = false; }
 
-  // ---- HKDF deriveKey helper (Web Crypto) ----
-  async function hkdfImport(sharedUint8Array, saltUint8Array, infoStr){
-    // import raw shared secret as HKDF base
-    const ikm = sharedUint8Array.buffer ? sharedUint8Array.buffer : sharedUint8Array;
-    const salt = saltUint8Array.buffer ? saltUint8Array.buffer : saltUint8Array;
+  // ---- HKDF import (derive AES-GCM 256 key) ----
+  async function hkdfImport(sharedUint8, saltUint8, infoStr) {
+    const ikm = sharedUint8.buffer ? sharedUint8.buffer : sharedUint8;
+    const salt = saltUint8.buffer ? saltUint8.buffer : saltUint8;
     const baseKey = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveKey']);
     const derivedKey = await crypto.subtle.deriveKey({
       name: 'HKDF',
       hash: 'SHA-256',
       salt: salt,
       info: enc.encode(infoStr || '')
-    }, baseKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt','decrypt']);
+    }, baseKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
     return derivedKey;
   }
 
-  // ---- Export / Import private key (encrypted file) ----
+  // ---- Export / Import key ----
   exportKeyBtn.onclick = async () => {
     if (!me) return showToast('Sign in first');
     const rec = await loadKeyRecord(me.userId);
     if (!rec) return showToast('No key to export');
-    // Download JSON file
     const blob = new Blob([JSON.stringify(rec)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `chat-key-${me.userId}.json`; document.body.appendChild(a); a.click(); a.remove();
+    const a = document.createElement('a'); a.href = url; a.download = `chat-key-${me.userId}.json`; document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
     showToast('Key exported');
   };
@@ -468,11 +432,10 @@
       if (!f) return;
       const text = await f.text();
       let rec;
-      try { rec = JSON.parse(text); } catch (e) { return showToast('Invalid key file'); }
-      // store in IndexedDB under current userId
-      if (!me) { return showToast('Sign in first to import key'); }
-      await saveKeyEncrypted(me.userId, rec);
-      showToast('Key imported. Reloading keys...');
+      try { rec = JSON.parse(text); } catch (err) { return showToast('Invalid key file'); }
+      if (!me) return showToast('Sign in first to import key');
+      await saveKeyRecord(me.userId, rec);
+      showToast('Key imported');
       await ensureKeypairForMe();
     };
     input.click();
@@ -480,25 +443,21 @@
 
   // ---- Sign out ----
   signOutBtn.onclick = () => {
-    // Clear in-memory, show sign-in UI again
     me = null; myKeyPair = null; selectedUser = null;
     signedInDiv.classList.add('hidden');
     gsiButtonDiv.style.display = 'block';
     messagesDiv.innerHTML = ''; usersDiv.innerHTML = '';
     stopPolling();
-    google.accounts.id.disableAutoSelect();
+    try { google.accounts.id.disableAutoSelect(); } catch (e) { /* ignore */ }
     showToast('Signed out');
   };
 
-  // ---- Utility: escape HTML ----
-  function escapeHtml(s){ if(!s) return ''; return s.replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
-
-  // ---- Utility: base64 conversions already above; include small helpers for typed arrays ----
-  // (arrayBufferToBase64 and base64ToUint8Array defined earlier in this file scope)
-
-  // ---- Start GSI and initial refresh ----
-  initGSI();
-  // initial users fetch (public endpoint)
-  refreshUsers();
+  // ---- Init UI and start ----
+  try {
+    initGSI();
+    refreshUsers();
+  } catch (e) {
+    console.error('Initialization error', e);
+  }
 
 })();
