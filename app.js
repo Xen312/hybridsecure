@@ -36,9 +36,16 @@
   let polling = false;
   let sodiumLib = null;
 
-  // ---- Initialize libsodium ----
-  await sodium.ready;
+  // ---- Initialize libsodium (safe) ----
+  if (typeof sodium === 'undefined') {
+    // Helpful error if the lib didn't load (e.g., blocked or wrong script)
+    console.error('libsodium not found. Make sure you included the UMD/browser build: https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.9/dist/browsers/sodium.js');
+    showToast('Crypto library failed to load. Disable extensions that block third-party scripts or fix index.html script tag.');
+    throw new Error('libsodium not loaded');
+  }
+  await sodium.ready; // wait for libsodium initialization
   sodiumLib = sodium;
+
 
   // ---- IndexedDB utilities (simple) ----
   function openDB(){
