@@ -7,8 +7,9 @@
   <link rel="stylesheet" href="styles.css">
   <!-- Google Identity Services -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <!-- libsodium UMD/browser build (exposes global `sodium`) -->
-<script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.9/dist/browsers/sodium.js"></script>
+  <!-- libsodium UMD/browser build (load BEFORE app.js) -->
+  <script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.15/dist/browsers/sodium.js"></script>
+
 
 </head>
 <body>
