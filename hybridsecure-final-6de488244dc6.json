@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "hybridsecure-final",
+  "private_key_id": "6de488244dc613bb16948744f8841059a8adc556",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCvwloqky4LH24m\nWY41pPx6lRt+6YKb2vspuC4PssTF/eL3/HvyNsUIv4NCMNgCsbYOoK3nhj4ptETc\nKZk+R+FGOb+ZWMK3mTIZCKn0RCXgIuuCtDm5aRV2+MkksQLaz0SCswPNcAVjEa9b\nyh+cdQoMxVzhsTXH3+K/Se0SupqKCPbquqNvMN/H7nBLRxS6UhmSOZkVIcP/pxup\nvHkdtajv/7/YaLZ7z9bvh/maNV1UY8zund0hAp0UQ60LHbvvBSC9Mf3pTkUwqgMS\nbXLL8aGq77394yf3Tbc+JFc10TPKrFOVFGKWHNPWP8SUaI+7wIJGR0Ljf6nF42YN\nbYQhCVMzAgMBAAECggEADKd7E26mVYGtThCLlxwqW28J3EDWuP7yr2XF1zaBSVoG\nseEZUW6VEBSt0CGxI7yExZfW/YDiT+FdRdau5FeLhiFZRKKp3ksm2ruPdPlFGtaY\nyz/LmihRNdAit0QRVwyuO5TE9NEYajIXRI4QaZTZpOK+1bcLDrl1W11otrz9rGtr\nH4Ic0BtTU5fwQc5cmV6olvJxFPvA0wykabhxWRNhZQev79eH9mVHO4uS0eYI4R4p\nYB1mFMt3k1zRMvNEhXY0MXz70u5Bc3kHT/jmz+HGlQ66/VSdtHf/UDF89060yxG1\naI3WbaLh8Pzd0n6zvbPRjdVGAFF+0/91RDygiv7QOQKBgQDptbJvQcOHd7RlSkVH\nwbyCHPDJKs8+yuAWoDXybfmHPZn8FNQ/xekOOUvAGUpqE065RbZqJoHh5rlI4RT0\ntYgPqSbsHetEskKV735zP0mIc0hOHt56sFTPaojAiTIt7+8Lih8hki0s9bEKAvqQ\nVb1NckOlnckjuo0FSDfjx2g7uQKBgQDAhbkOYJTmcAFoy/d/WO0pIDYslgv/974t\noIYPrZtIOPG+QWzQc5bjJLU/JccucAmTQF4srmiDd71OSP0Bq987W/mjCdtDdWYb\n1gQkX3U1rtWT8nZ5S/rX62+wIXnhU4KGZOYQS9VqY/H/bLKyvfS03FMNTY2Nsc1K\nIrkR5fB0SwKBgCU3LcbRrhUwVqWaghW/IAmIGj+udXoGTFDOCkkkggurH44osvPE\nzCvbq9hXLqZdlLekBjw5DY2vc+nLDc856QS1ZuFKkmBKEphVnskzVr5HvUfTWpIm\n6hptWIFwV3FBN8uanwJ1iIQUS7DQcJ3zSUW/4E3LJnBuEG665Ut8QXjhAoGACIfk\nY1a0QmHELjibhvER0Ti0LdWYQodfzfXG+vreXpznWV7cy3/Tt8zwmxO5d71PL08y\n3Rf9WZX8tXNWgrRy99ZjgW32YU7ab3FUTahNMUvF+wBLb6SGQPsVv+A73lgs+HeQ\nGjjCBCzZlE/kuzbfmQQKShSdqSGvzxEq0jg2J3ECgYBqo7kp3Gd0u6c78WMHo9yO\nuuX0XOk0cTw9UuOG7GoRDtBNrS3bsXJHsZDdJgRCiYsvC47VZtHsUrKZ8sySNCN0\nrFYSuv+RrUhbhH0AZQPZP4o0ao54fK/Ddjj69I5IfEafjJi0rIcT2zkt2ZYqXgqI\ngGQo72GveXTX2iHboKQIvw==\n-----END PRIVATE KEY-----\n",
+  "client_email": "hybridsecure@hybridsecure-final.iam.gserviceaccount.com",
+  "client_id": "104136631589876855695",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/hybridsecure%40hybridsecure-final.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

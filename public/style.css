@@ -1,0 +1,266 @@
+/* BASIC RESETS */
+* {
+  margin: 0; padding: 0;
+  box-sizing: border-box;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+html {
+  overflow: hidden;
+}
+
+body {
+  background: #f4f5f7;
+  height: 100vh;
+}
+
+/* CENTERED SCREENS */
+.center-screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* LOGIN + USERNAME BOX */
+.login-box {
+  background: white;
+  padding: 28px;
+  width: 320px;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+  text-align: center;
+}
+
+.login-box h2, .login-box h3 {
+  margin-bottom: 12px;
+}
+
+.login-box input {
+  width: 100%;
+  padding: 10px;
+  margin-top: 14px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+}
+
+/* GOOGLE LOGIN BUTTON */
+.google-btn {
+  width: 100%;
+  padding: 10px;
+  margin-top: 18px;
+  background: #5865F2; /* Discord blue */
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.error-msg {
+  color: #e63946;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+/* MAIN APP LAYOUT */
+.app {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+}
+
+/* SIDEBAR */
+.sidebar {
+  width: 260px;
+  background: #ffffff;
+  border-right: 1px solid #e2e4e8;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  padding: 14px;
+  gap: 12px;
+  border-bottom: 1px solid #e2e4e8;
+}
+
+.pfp {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+}
+
+.pfp.small {
+  width: 36px;
+  height: 36px;
+}
+
+.my-name {
+  font-weight: 600;
+}
+
+.sidebar-users {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.user-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #f1f2f3;
+}
+
+.user-item:hover {
+  background: #f5f7fa;
+}
+
+.username-label {
+  font-weight: 500;
+}
+
+/* LOGOUT BUTTON */
+.logout-btn {
+  background: #fafbfc;
+  padding: 10px;
+  border: none;
+  border-top: 1px solid #e2e4e8;
+  cursor: pointer;
+}
+
+/* CHAT AREA */
+.chat-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid #e2e4e8;
+  background: white;
+}
+
+.chat-username {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.message-row {
+  display: flex;
+  margin: 8px 0;
+}
+
+.message-row.me {
+  justify-content: flex-end;
+}
+
+.message-row.them {
+  justify-content: flex-start;
+}
+
+.bubble {
+  max-width: 65%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #f1f1f1;
+  word-wrap: break-word;
+}
+
+.message-row.me .bubble {
+  background: #5b6dff;
+  color: white;
+}
+
+.username {
+  font-size: 12px;
+  font-weight: bold;
+  margin-bottom: 4px;
+  opacity: 0.8;
+}
+
+.text {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.time {
+  font-size: 11px;
+  margin-top: 4px;
+  opacity: 0.7;
+}
+
+.composer {
+  padding: 12px;
+  border-top: 1px solid #e2e4e8;
+  background: #ffffff;
+  display: flex;
+  gap: 10px;
+  position: fixed;
+  bottom: 0;
+  width: calc(100% - 260px);
+}
+
+.composer input {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+}
+
+.primary-btn.small {
+  padding: 10px 16px;
+}
+
+.search-bar {
+  width: 90%;
+  margin: 10px auto;
+  padding: 8px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  display: block;
+}
+
+/* ===== CHAT CONTAINER ===== */
+#messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+
+/* ===== BASE BUBBLE ===== */
+.bubble {
+  max-width: 65%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #f1f1f1;
+  align-self: flex-start; /* 👈 RECEIVER (LEFT) */
+  word-wrap: break-word;
+}
+
+/* ===== MY MESSAGE ===== */
+.bubble.mine {
+  background: #dcf8c6;
+  align-self: flex-end;   /* 👈 SENDER (RIGHT) */
+}
+
+/* ===== NAME ABOVE BUBBLE ===== */
+.bubble-name {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  margin-bottom: 2px;
+}
