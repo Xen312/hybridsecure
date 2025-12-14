@@ -1,223 +1,196 @@
-import express from "express";
-import http from "http";
-import WebSocket, { WebSocketServer } from "ws";
-import cookieParser from "cookie-parser";
+import { google } from "googleapis";
 import dotenv from "dotenv";
-import { OAuth2Client } from "google-auth-library";
-import path from "path";
-import { fileURLToPath } from "url";
-
-import {
-  getUserByGoogleId,
-  createUser,
-  listUsers,
-  getMessages,
-  saveMessage,
-  logUserKeys,
-  logChatSecret,
-  logPlaintextMessage,
-  logEncryptedMessage,
-  logNetworkTraffic
-} from "./sheets.js";
-
-import {
-  generateX25519KeyPair,
-  computeSharedSecret,
-  deriveAESKey,
-  encryptAESGCM,
-  decryptAESGCM
-} from "./crypto.js";
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+/* ================= ENV VALIDATION ================= */
 
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+const {
+  SERVICE_ACCOUNT_EMAIL,
+  SERVICE_ACCOUNT_PRIVATE_KEY,
+  SPREADSHEET_ID
+} = process.env;
 
-app.use(express.json());
-app.use(cookieParser());
-app.use(express.static(path.join(__dirname, "public")));
-
-/* ================= GOOGLE AUTH ================= */
-
-const oauth = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI
-);
-
-app.get("/auth/google", (req, res) => {
-  res.redirect(
-    oauth.generateAuthUrl({
-      scope: ["profile", "email"],
-      prompt: "select_account"
-    })
-  );
-});
-
-app.get("/auth/google/callback", async (req, res) => {
-  try {
-    const { tokens } = await oauth.getToken(req.query.code);
-
-    const ticket = await oauth.verifyIdToken({
-      idToken: tokens.id_token,
-      audience: process.env.GOOGLE_CLIENT_ID
-    });
-
-    const payload = ticket.getPayload();
-
-    res.cookie("google_id", payload.sub, {
-      httpOnly: true,
-      sameSite: "lax",
-      path: "/",
-      maxAge: 1000 * 60 * 60 * 24
-    });
-
-    res.redirect("/");
-  } catch (err) {
-    console.error("AUTH ERROR:", err);
-    res.status(500).send("Authentication failed");
-  }
-});
-
-app.get("/logout", (req, res) => {
-  res.clearCookie("google_id", {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/"
-  });
-  res.redirect("/");
-});
-
-/* ================= AUTH API ================= */
-
-const userKeys = new Map();
-const chatKeys = new Map();
-
-async function ensureUserKeys(google_id, username = "unknown") {
-  if (!userKeys.has(google_id)) {
-    const kp = generateX25519KeyPair();
-    userKeys.set(google_id, kp);
-
-    await logUserKeys({
-      google_id,
-      username,
-      privateKey: kp.privateKey,
-      publicKey: kp.publicKey
-    });
-  }
-  return userKeys.get(google_id);
+if (!SERVICE_ACCOUNT_EMAIL) {
+  throw new Error("Missing SERVICE_ACCOUNT_EMAIL");
 }
 
-app.get("/me", async (req, res) => {
-  const id = req.cookies.google_id;
-  if (!id) return res.json({ error: "not logged in" });
+if (!SERVICE_ACCOUNT_PRIVATE_KEY) {
+  throw new Error("Missing SERVICE_ACCOUNT_PRIVATE_KEY");
+}
 
-  const user = await getUserByGoogleId(id);
-  if (!user) return res.json({ error: "user missing" });
+if (!SPREADSHEET_ID) {
+  throw new Error("Missing SPREADSHEET_ID");
+}
 
-  await ensureUserKeys(id, user.username);
-  res.json(user);
-});
+/* ================= AUTH ================= */
 
-app.post("/username", async (req, res) => {
-  const id = req.cookies.google_id;
-  if (!id) return res.status(401).json({ error: "unauthorized" });
+const privateKey = SERVICE_ACCOUNT_PRIVATE_KEY.includes("\\n")
+  ? SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n") // local .env
+  : SERVICE_ACCOUNT_PRIVATE_KEY;                      // Railway
 
-  await createUser({
-    google_id: id,
-    username: req.body.username,
-    picture: req.body.picture,
-    email: req.body.email
-  });
-
-  res.json({ success: true });
-});
-
-app.get("/users", async (req, res) => {
-  const me = req.cookies.google_id;
-  if (!me) return res.json([]);
-
-  const users = await listUsers();
-  res.json(users.filter(u => u.google_id !== me));
-});
-
-app.get("/messages", async (req, res) => {
-  res.json(await getMessages(req.query.chat_id));
-});
-
-/* ================= WEBSOCKET ================= */
-
-wss.on("connection", ws => {
-  ws.on("message", async raw => {
-    const msg = JSON.parse(raw);
-
-    if (msg.type === "join") {
-      ws.chat_id = msg.chat_id;
-
-      if (!chatKeys.has(msg.chat_id)) {
-        const [a, b] = msg.chat_id.split("_");
-
-        const sa = await ensureUserKeys(a);
-        const sb = await ensureUserKeys(b);
-
-        const secret = computeSharedSecret(sa.privateKey, sb.publicKey);
-        const aesKey = deriveAESKey(secret, msg.chat_id);
-
-        chatKeys.set(msg.chat_id, aesKey);
-
-        await logChatSecret({
-          chat_id: msg.chat_id,
-          user_a: a,
-          user_b: b,
-          sharedSecret: secret.toString("base64"),
-          aesKey: aesKey.toString("base64")
-        });
-      }
-      return;
-    }
-
-    const aesKey = chatKeys.get(msg.chat_id);
-    const encrypted = encryptAESGCM(aesKey, msg.text);
-
-    await logPlaintextMessage({
-      chat_id: msg.chat_id,
-      sender: msg.sender_id,
-      plaintext: msg.text
-    });
-
-    await logEncryptedMessage({
-      chat_id: msg.chat_id,
-      sender: msg.sender_id,
-      ...encrypted
-    });
-
-    await logNetworkTraffic({
-      direction: "client→server",
-      payload: encrypted
-    });
-
-    const decrypted = decryptAESGCM(
-      aesKey,
-      encrypted.iv,
-      encrypted.ciphertext,
-      encrypted.authTag
-    );
-
-    const finalMsg = { ...msg, text: decrypted };
-    await saveMessage(finalMsg);
-
-    wss.clients.forEach(c => {
-      if (c.readyState === WebSocket.OPEN && c.chat_id === msg.chat_id) {
-        c.send(JSON.stringify({ type: "message", message: finalMsg }));
-      }
-    });
-  });
-});
-
-server.listen(process.env.PORT || 8080, () =>
-  console.log("Server running on http://localhost:8080")
+const auth = new google.auth.JWT(
+  SERVICE_ACCOUNT_EMAIL,
+  null,
+  privateKey,
+  ["https://www.googleapis.com/auth/spreadsheets"]
 );
+
+const sheets = google.sheets({ version: "v4", auth });
+
+/* ================= USERS ================= */
+/*
+USERS sheet layout:
+A: google_id
+B: username
+C: picture
+D: email
+*/
+
+export async function createUser({ google_id, username, picture, email }) {
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "USERS!A:D",
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [[google_id, username, picture, email]]
+    }
+  });
+}
+
+export async function getUserByGoogleId(google_id) {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "USERS!A2:D"
+  });
+
+  const rows = res.data.values || [];
+  const row = rows.find(r => r[0] === google_id);
+
+  if (!row) return null;
+
+  return {
+    google_id: row[0],
+    username: row[1],
+    picture: row[2],
+    email: row[3]
+  };
+}
+
+export async function listUsers() {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "USERS!A2:D"
+  });
+
+  return (res.data.values || []).map(r => ({
+    google_id: r[0],
+    username: r[1],
+    picture: r[2],
+    email: r[3]
+  }));
+}
+
+/* ================= MESSAGES ================= */
+/*
+MESSAGES sheet layout:
+A: chat_id
+B: sender_id
+C: username
+D: message
+E: timestamp
+*/
+
+export async function saveMessage(msg) {
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "MESSAGES!A:E",
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [[
+        msg.chat_id,
+        msg.sender_id,
+        msg.username,
+        msg.text,
+        msg.timestamp
+      ]]
+    }
+  });
+}
+
+export async function getMessages(chat_id) {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "MESSAGES!A2:E"
+  });
+
+  return (res.data.values || [])
+    .filter(r => r[0] === chat_id)
+    .map(r => ({
+      chat_id: r[0],
+      sender_id: r[1],
+      username: r[2],
+      text: r[3],
+      timestamp: r[4]
+    }));
+}
+
+/* ================= CRYPTO / LOGGING ================= */
+/*
+These sheets are for judge visibility
+*/
+
+export async function logUserKeys({ google_id, username, privateKey, publicKey }) {
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "USER_KEYS!A:D",
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [[google_id, username, privateKey, publicKey]]
+    }
+  });
+}
+
+export async function logChatSecret({ chat_id, user_a, user_b, sharedSecret, aesKey }) {
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "CHAT_KEYS!A:E",
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [[chat_id, user_a, user_b, sharedSecret, aesKey]]
+    }
+  });
+}
+
+export async function logPlaintextMessage({ chat_id, sender, plaintext }) {
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "PLAINTEXT!A:C",
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [[chat_id, sender, plaintext]]
+    }
+  });
+}
+
+export async function logEncryptedMessage({ chat_id, sender, iv, ciphertext, authTag }) {
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "ENCRYPTED!A:E",
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [[chat_id, sender, iv, ciphertext, authTag]]
+    }
+  });
+}
+
+export async function logNetworkTraffic({ direction, payload }) {
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "TRAFFIC!A:B",
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [[direction, JSON.stringify(payload)]]
+    }
+  });
+}
