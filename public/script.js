@@ -80,9 +80,32 @@ async function checkAuth() {
 document.addEventListener("DOMContentLoaded", checkAuth);
 
 /* ===== LOGIN / LOGOUT ===== */
-googleLoginBtn.onclick = () => {
-  window.location.href = "/auth/google";
+googleLoginBtn.onclick = async () => {
+  try {
+    const credential = window.googleCredential; // or however you store it
+
+    const res = await fetch("/auth/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential })
+    });
+
+    const data = await res.json();
+
+    if (!data.success) {
+      alert("Google login failed");
+      return;
+    }
+
+    // Stay on "/", do NOT redirect
+    initApp(data.user);
+
+  } catch (err) {
+    console.error(err);
+    alert("Login error");
+  }
 };
+
 
 logoutBtn.onclick = () => {
   window.location.href = "/logout";
