@@ -1,3 +1,14 @@
+# dependencies
+node_modules/
+
+# environment variables
 .env
-*.pem
-*.key
+
+# Google credentials
+*.json
+client_secret_*.json
+*-final-*.json
+
+# OS / editor junk
+.DS_Store
+.vscode/
