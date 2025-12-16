@@ -1,204 +1,271 @@
-import { google } from "googleapis";
-import dotenv from "dotenv";
+/* =======================
+   IMPORTS
+======================= */
+import express from "express";
+import http from "http";
+import { WebSocketServer } from "ws";
+import cookieParser from "cookie-parser";
 import path from "path";
 import { fileURLToPath } from "url";
+import dotenv from "dotenv";
+import { OAuth2Client } from "google-auth-library";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+/* ===== CRYPTO ===== */
+import {
+  generateX25519KeyPair,
+  computeSharedSecret,
+  deriveAESKeyHKDF,
+  encryptAESGCM
+} from "./crypto.js";
 
-app.use(express.static(__dirname));
-
+/* ===== GOOGLE SHEETS ===== */
+import {
+  createUser,
+  getUserByGoogleId,
+  listUsers,
+  saveMessage,
+  getMessages,
+  logUserKeys,
+  logChatSecret,
+  logEncryptedMessage,
+  logPlaintextMessage,
+  logNetworkTraffic
+} from "./sheets.js";
 
 dotenv.config();
 
-/* ================= ENV VALIDATION ================= */
+/* =======================
+   PATH FIX
+======================= */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const {
-  SERVICE_ACCOUNT_EMAIL,
-  SERVICE_ACCOUNT_PRIVATE_KEY,
-  SPREADSHEET_ID
-} = process.env;
+/* =======================
+   CONSTANTS
+======================= */
+const PORT = process.env.PORT || 8080;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
-if (!SERVICE_ACCOUNT_EMAIL) {
-  throw new Error("Missing SERVICE_ACCOUNT_EMAIL");
-}
+/* =======================
+   APP SETUP
+======================= */
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
 
-if (!SERVICE_ACCOUNT_PRIVATE_KEY) {
-  throw new Error("Missing SERVICE_ACCOUNT_PRIVATE_KEY");
-}
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
-if (!SPREADSHEET_ID) {
-  throw new Error("Missing SPREADSHEET_ID");
-}
+/* =======================
+   IN-MEMORY STORAGE
+======================= */
+const userKeys = new Map(); // google_id -> keypair
 
-/* ================= AUTH ================= */
+/* =======================
+   MIDDLEWARE
+======================= */
+app.use(express.json());
+app.use(cookieParser());
+app.use(express.static(path.join(__dirname, "public")));
 
-const privateKey = SERVICE_ACCOUNT_PRIVATE_KEY.includes("\\n")
-  ? SERVICE_ACCOUNT_PRIVATE_KEY.replace(/\\n/g, "\n") // local .env
-  : SERVICE_ACCOUNT_PRIVATE_KEY;                      // Railway
+/* =======================
+   ROUTES
+======================= */
 
-const auth = new google.auth.JWT(
-  SERVICE_ACCOUNT_EMAIL,
-  null,
-  privateKey,
-  ["https://www.googleapis.com/auth/spreadsheets"]
-);
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
-const sheets = google.sheets({ version: "v4", auth });
+/* ---------- GOOGLE LOGIN ---------- */
+app.post("/auth/google", async (req, res) => {
+  try {
+    const { credential } = req.body;
 
-/* ================= USERS ================= */
-/*
-USERS sheet layout:
-A: google_id
-B: username
-C: picture
-D: email
-*/
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: GOOGLE_CLIENT_ID
+    });
 
-export async function createUser({ google_id, username, picture, email }) {
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: "USERS!A:D",
-    valueInputOption: "RAW",
-    requestBody: {
-      values: [[google_id, username, picture, email]]
+    const payload = ticket.getPayload();
+    const google_id = payload.sub;
+
+    let user = await getUserByGoogleId(google_id);
+
+    if (!user) {
+      await createUser({
+        google_id,
+        username: payload.name,
+        picture: payload.picture,
+        email: payload.email
+      });
+
+      user = await getUserByGoogleId(google_id);
     }
-  });
-}
 
-export async function getUserByGoogleId(google_id) {
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: "USERS!A2:D"
-  });
+    if (!userKeys.has(google_id)) {
+      const kp = generateX25519KeyPair();
+      userKeys.set(google_id, kp);
 
-  const rows = res.data.values || [];
-  const row = rows.find(r => r[0] === google_id);
-
-  if (!row) return null;
-
-  return {
-    google_id: row[0],
-    username: row[1],
-    picture: row[2],
-    email: row[3]
-  };
-}
-
-export async function listUsers() {
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: "USERS!A2:D"
-  });
-
-  return (res.data.values || []).map(r => ({
-    google_id: r[0],
-    username: r[1],
-    picture: r[2],
-    email: r[3]
-  }));
-}
-
-/* ================= MESSAGES ================= */
-/*
-MESSAGES sheet layout:
-A: chat_id
-B: sender_id
-C: username
-D: message
-E: timestamp
-*/
-
-export async function saveMessage(msg) {
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: "MESSAGES!A:E",
-    valueInputOption: "RAW",
-    requestBody: {
-      values: [[
-        msg.chat_id,
-        msg.sender_id,
-        msg.username,
-        msg.text,
-        msg.timestamp
-      ]]
+      await logUserKeys({
+        google_id,
+        username: user.username,
+        privateKey: kp.privateKey,
+        publicKey: kp.publicKey
+      });
     }
-  });
-}
 
-export async function getMessages(chat_id) {
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: "MESSAGES!A2:E"
-  });
+    res.cookie("google_id", google_id, {
+      httpOnly: true,
+      sameSite: "lax"
+    });
 
-  return (res.data.values || [])
-    .filter(r => r[0] === chat_id)
-    .map(r => ({
-      chat_id: r[0],
-      sender_id: r[1],
-      username: r[2],
-      text: r[3],
-      timestamp: r[4]
-    }));
-}
+    res.json({ success: true, user });
 
-/* ================= CRYPTO / LOGGING ================= */
-/*
-These sheets are for judge visibility
-*/
+  } catch (err) {
+    console.error(err);
+    res.status(401).json({ error: "Google auth failed" });
+  }
+});
 
-export async function logUserKeys({ google_id, username, privateKey, publicKey }) {
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: "USER_KEYS!A:D",
-    valueInputOption: "RAW",
-    requestBody: {
-      values: [[google_id, username, privateKey, publicKey]]
+/* ---------- CURRENT USER ---------- */
+app.get("/me", async (req, res) => {
+  const google_id = req.cookies.google_id;
+  if (!google_id) return res.json(null);
+
+  const user = await getUserByGoogleId(google_id);
+  res.json(user);
+});
+
+
+app.get("/users", async (req, res) => {
+  const google_id = req.cookies.google_id;
+  if (!google_id) return res.status(401).json([]);
+
+  const users = await listUsers();
+  res.json(users.filter(u => u.google_id !== google_id));
+});
+
+
+/* ---------- CHAT HISTORY ---------- */
+app.get("/messages", async (req, res) => {
+  const { chat_id } = req.query;
+  if (!chat_id) return res.json([]);
+  res.json(await getMessages(chat_id));
+});
+
+/* =======================
+   WEBSOCKET
+======================= */
+wss.on("connection", socket => {
+  socket.on("message", async raw => {
+    const msg = JSON.parse(raw);
+
+    if (msg.type === "join") {
+      socket.chat_id = msg.chat_id;
+      socket.user_id = msg.user_id;
+      return;
     }
-  });
-}
 
-export async function logChatSecret({ chat_id, user_a, user_b, sharedSecret, aesKey }) {
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: "CHAT_KEYS!A:E",
-    valueInputOption: "RAW",
-    requestBody: {
-      values: [[chat_id, user_a, user_b, sharedSecret, aesKey]]
-    }
-  });
-}
+    const { chat_id, sender_id, username, text, timestamp } = msg;
 
-export async function logPlaintextMessage({ chat_id, sender, plaintext }) {
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: "PLAINTEXT!A:C",
-    valueInputOption: "RAW",
-    requestBody: {
-      values: [[chat_id, sender, plaintext]]
-    }
-  });
-}
+    /* ===== LOG PLAINTEXT ===== */
+    await logPlaintextMessage({
+      chat_id,
+      sender: sender_id,
+      plaintext: text,
+      timestamp
+    });
 
-export async function logEncryptedMessage({ chat_id, sender, iv, ciphertext, authTag }) {
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: "ENCRYPTED!A:E",
-    valueInputOption: "RAW",
-    requestBody: {
-      values: [[chat_id, sender, iv, ciphertext, authTag]]
-    }
-  });
-}
+    /* ===== CRYPTO ===== */
+    const [a, b] = chat_id.split("_");
+    const receiver_id = sender_id === a ? b : a;
+    
+    // Ensure sender key exists at WS-time
+    if (!userKeys.has(sender_id)) {
+      const user = await getUserByGoogleId(sender_id);
+      if (user) {
+        const kp = generateX25519KeyPair();
+        userKeys.set(sender_id, kp);
 
-export async function logNetworkTraffic({ direction, payload }) {
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: "TRAFFIC!A:B",
-    valueInputOption: "RAW",
-    requestBody: {
-      values: [[direction, JSON.stringify(payload)]]
+        await logUserKeys({
+          google_id: sender_id,
+          username: user.username,
+          privateKey: kp.privateKey,
+          publicKey: kp.publicKey
+        });
+      }
     }
+
+    const senderKey = userKeys.get(sender_id);
+    const receiverKey = userKeys.get(receiver_id);
+
+    if (senderKey && receiverKey) {
+      const sharedSecret = computeSharedSecret(
+        senderKey.privateKey,
+        receiverKey.publicKey
+      );
+
+      const aesKey = deriveAESKeyHKDF(sharedSecret, chat_id);
+
+      // Log chat secret ONCE per chat
+      if (!global.chatSecretsLogged) {
+        global.chatSecretsLogged = new Set();
+      }
+
+      if (!global.chatSecretsLogged.has(chat_id)) {
+
+        const [user_a, user_b] = chat_id.split("_");
+
+        console.log("logChatSecret reached");
+        await logChatSecret({
+          chat_id,
+          user_a,
+          user_b,
+          sharedSecret: sharedSecret.toString("base64"),
+          aesKey: aesKey.toString("base64")
+        });
+
+        socket.chatSecretLogged = true;
+      }
+
+      const encrypted = encryptAESGCM(aesKey, text);
+
+      console.log("logEncryptedMessage reached");
+      await logEncryptedMessage({
+        chat_id,
+        sender: sender_id,
+        iv: encrypted.iv,
+        ciphertext: encrypted.ciphertext,
+        authTag: encrypted.authTag,
+        timestamp
+      });
+
+      await logNetworkTraffic({
+        direction: "websocket",
+        payload: encrypted.ciphertext
+      });
+    }
+
+    /* ===== SAVE MESSAGE ===== */
+    await saveMessage(msg);
+
+    /* ===== BROADCAST ===== */
+    wss.clients.forEach(client => {
+      if (
+        client.readyState === client.OPEN &&
+        client.chat_id === chat_id
+      ) {
+        client.send(JSON.stringify({
+          type: "message",
+          message: msg
+        }));
+      }
+    });
   });
-}
+});
+
+/* =======================
+   START SERVER
+======================= */
+server.listen(PORT, () => {
+  console.log(` Server running on port http://localhost:${PORT}`);
+});
